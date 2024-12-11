@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: category-api-deployment
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: category-api
+  template:
+    metadata:
+      labels:
+        app: category-api
+    spec:
+      containers:
+        - name: category-api
+          image: category-api:latest
+          ports:
+            - containerPort: 3000
+          env:
+            - name: MONGO_URI
+              valueFrom:
+                secretKeyRef:
+                  name: mongo-secret
+                  key: mongo-uri

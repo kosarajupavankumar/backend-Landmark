@@ -1,0 +1,94 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v2
+        with:
+          node-version: '23'
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build application
+        run: npm run build
+
+      - name: Build Docker image
+        run: docker build -t ${{ secrets.DOCKER_USERNAME }}/category-api:latest .
+
+      - name: List Docker images
+        run: docker images # Check if the image is built
+
+      - name: Log in to Docker Hub
+        run: echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
+
+      - name: Push Docker image to Docker Hub
+        run: docker push ${{ secrets.DOCKER_USERNAME }}/category-api:latest
+
+  deploy:
+    runs-on: ubuntu-latest
+    needs: build
+
+    steps:
+      # Step 1: Checkout the repository
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      # Step 2: Set up Azure CLI to manage Azure resources
+      - name: Set up Azure CLI
+        uses: azure/setup-azurecli@v1
+        with:
+          version: 'latest'
+
+      # Step 3: Authenticate to Azure using a Service Principal
+      - name: Azure Login
+        run: |
+          az login --service-principal -u ${{ secrets.AZURE_CLIENT_ID }} -p ${{ secrets.AZURE_CLIENT_SECRET }} --tenant ${{ secrets.AZURE_TENANT_ID }}
+
+      # Step 4: Set up kubectl to interact with the AKS cluster
+      - name: Set up kubectl to use AKS
+        run: |
+          az aks get-credentials --resource-group ${{ secrets.AZURE_RESOURCE_GROUP }} --name ${{ secrets.AKS_CLUSTER_NAME }}
+
+      # Step 5: Set up Helm
+      - name: Set up Helm
+        uses: azure/setup-helm@v1
+        with:
+          version: 'latest'
+
+      # Step 6: Bake the Kubernetes manifests using k8s-bake (Helm or Kustomize)
+      - name: Kubernetes bake
+        uses: Azure/k8s-bake@v3.0.1
+        with:
+          helm-chart-path: ./k8s/helm/chart-directory # Path to your Helm chart
+          values: ./k8s/helm/values.yaml # Optional: Path to Helm values file
+          output-path: ./k8s/baked-manifests # Directory to output the baked manifests
+
+      # Step 7: Apply the baked Kubernetes manifests to AKS
+      - name: Apply Kubernetes manifests
+        run: |
+          kubectl apply -f ./k8s/baked-manifests/deployment.yaml
+          kubectl apply -f ./k8s/baked-manifests/service.yaml
+
+      # Step 8: Rollback on failure
+      - name: Rollback on failure
+        if: failure()
+        run: helm rollback category-api
